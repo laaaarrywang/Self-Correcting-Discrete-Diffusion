@@ -1,6 +1,6 @@
-# Self-Correcting Diffusion Language Model
+# Generalized Discrete Diffusion with Self-Correction
 
-This repository contains the implementation code for our discrete diffusion language model with self-correction capabilities.
+This repository contains the implementation code for our Self-Correcting DiscreteDiffusion (SCDD) model, a generalized discrete diffusion model with self-correction capabilities.
 
 ## Environment Setup
 
