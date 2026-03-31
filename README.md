@@ -94,6 +94,10 @@ Available model configurations in `configs/model/`:
 │   ├── dimamba.py      # Diffusion Mamba
 │   └── autoregressive.py
 ├── configs/             # Hydra configuration files
+├── rebuttal/            # Rebuttal experiments
+│   ├── schedule_learning/ # Learnable noise schedule
+│   ├── llm_as_a_judge/    # LLM-as-a-judge experiment for semantic evaluation
+│   └── val_ppl_calculation/ # Calculate validation PPL of official GIDD+ checkpoints
 └── scripts/             # Training and evaluation scripts
 ```
 

@@ -1,0 +1,16 @@
+# Drop-in overrides for enabling the learnable SCDD corruption schedule.
+
+parameterization: scdd
+
+noise:
+  type: loglinear
+
+forward:
+  name: mix
+  ratio: 0.1
+  gamma: 1
+  t_peak: 0.5
+  schedule_version: learnable
+
+optim:
+  schedule_lr: 1e-5

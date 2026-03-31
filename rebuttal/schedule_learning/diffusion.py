@@ -22,6 +22,12 @@ import utils
 LOG2 = math.log(2)
 
 
+def _get_alpha_beta_bar_from_rho_gamma(rho, gamma):
+  alpha_bar = rho * gamma
+  beta_bar = (1.0 - rho) * gamma
+  return alpha_bar, beta_bar
+
+
 def _sample_categorical(categorical_probs):
   categorical_probs = categorical_probs.to(torch.float64)
   gumbel_norm = (
@@ -228,10 +234,29 @@ class Diffusion(L.LightningModule):
 
     self.noise = noise_schedule.get_noise(self.config,
                                           dtype=self.dtype)
+    self.schedule_version = getattr(
+      self.config.forward, 'schedule_version', 'base')
+    if self._uses_learnable_schedule():
+      p_u = self.config.forward.ratio
+      sigma_max_gamma = noise_schedule.get_sigma_max_gamma()
+      sigma_max_rho = noise_schedule.get_sigma_max_rho(
+        sigma_max_gamma, p_u=p_u)
+      # Keep schedule values slightly away from 1.0 to avoid log(0).
+      sigma_min = -math.log(1.0 - 1e-3)
+      self.noise_gamma = noise_schedule.LearnablePolynomialNoise(
+        sigma_min, sigma_max_gamma)
+      self.noise_rho = noise_schedule.LearnablePolynomialNoise(
+        sigma_min, sigma_max_rho)
     if self.config.training.ema > 0:
+      schedule_params = (
+        itertools.chain(self.noise_gamma.parameters(),
+                        self.noise_rho.parameters())
+        if self._uses_learnable_schedule() else iter(())
+      )
       self.ema = models.ema.ExponentialMovingAverage(
         itertools.chain(self.backbone.parameters(),
-                        self.noise.parameters()),
+                        self.noise.parameters(),
+                        schedule_params),
         decay=self.config.training.ema)
     else:
       self.ema = None
@@ -242,7 +267,7 @@ class Diffusion(L.LightningModule):
     self.neg_infinity = -1000000.0
     self.fast_forward_epochs = None
     self.fast_forward_batches = None
-
+    self.loss_ema = None
     self._validate_configuration()
 
   def _validate_configuration(self):
@@ -257,6 +282,11 @@ class Diffusion(L.LightningModule):
       assert self.parameterization in {'d3pm', 'subs', 'scdd'}
     if self.subs_masking:
       assert self.parameterization in {'d3pm', 'scdd'}
+
+  def _uses_learnable_schedule(self):
+    return (
+      self.parameterization == 'scdd'
+      and self.schedule_version == 'learnable')
 
   def on_load_checkpoint(self, checkpoint):
     if self.ema:
@@ -361,9 +391,18 @@ class Diffusion(L.LightningModule):
   def optimizer_step(self, *args, **kwargs):
     super().optimizer_step(*args, **kwargs)
     if self.ema:
-      self.ema.update(itertools.chain(
-        self.backbone.parameters(),
-        self.noise.parameters()))
+      self.ema.update(self._ema_params())
+
+  def _ema_params(self):
+    params = itertools.chain(
+      self.backbone.parameters(),
+      self.noise.parameters())
+    if self._uses_learnable_schedule():
+      params = itertools.chain(
+        params,
+        self.noise_gamma.parameters(),
+        self.noise_rho.parameters())
+    return params
 
   def _subs_parameterization(self, logits, xt):
     # log prob at the mask index = - infinity
@@ -476,10 +515,16 @@ class Diffusion(L.LightningModule):
     return self.T * L_vb
 
 
-  def _get_alpha_beta_bar(self, t, max_ratio, gamma, t_peak=0.5):
+  def _get_alpha_beta_bar(
+    self, t, max_ratio, gamma, t_peak=0.5, version='base'):
     """
     t: (batch_size)
     """
+    if version == 'learnable' and self._uses_learnable_schedule():
+      gamma_t = self.noise_gamma.schedule(t)
+      rho_t = self.noise_rho.schedule(t)
+      return _get_alpha_beta_bar_from_rho_gamma(rho_t, gamma_t)
+
     # B = 2**gamma * max_ratio / (1-max_ratio) # ensures that the uniform noise ratio achieves maximum at t = 0.5
     # ct = B * torch.pow(t, gamma/2) * torch.pow(1-t, gamma/2)
     # t in [0,1], want peak at t_peak and ratio(ct_peak)=max_ratio via odds=ct
@@ -507,13 +552,16 @@ class Diffusion(L.LightningModule):
     return alpha_bar_t, beta_bar_t
 
 
-  def _get_alpha_beta(self, t, max_ratio, gamma, dt = None, t_peak=0.5):
+  def _get_alpha_beta(
+    self, t, max_ratio, gamma, dt=None, t_peak=0.5, version='base'):
 
     if dt is None:
       dt = 1 / self.T
-    s = t - dt 
-    alpha_bar_t, beta_bar_t = self._get_alpha_beta_bar(t, max_ratio, gamma, t_peak)
-    alpha_bar_s, beta_bar_s = self._get_alpha_beta_bar(s, max_ratio, gamma, t_peak)
+    s = t - dt
+    alpha_bar_t, beta_bar_t = self._get_alpha_beta_bar(
+      t, max_ratio, gamma, t_peak, version=version)
+    alpha_bar_s, beta_bar_s = self._get_alpha_beta_bar(
+      s, max_ratio, gamma, t_peak, version=version)
 
     alpha_t = alpha_bar_t / alpha_bar_s
     beta_t = (alpha_bar_t + beta_bar_t)/(alpha_bar_s + beta_bar_s) - alpha_t
@@ -624,16 +672,15 @@ class Diffusion(L.LightningModule):
     gamma = self.config.forward.gamma
     t_peak = self.config.forward.t_peak
 
-    # In paper, we use \rho_t and \gamma_t as the marginal distribution parameters.
-    # In code implementation, we use \bar\alpha_t and \bar\beta_t.
-    # The two sets of parameters are related by the following equations:
-    # \gamma_t = \bar{\alpha}_t + \bar{\beta}_t; 
-    # \rho_t = \bar{\alpha}_t / (\bar{\alpha}_t + \bar{\beta}_t);
-    alpha_bar_t, beta_bar_t = self._get_alpha_beta_bar(t, max_ratio, gamma, t_peak)
-    alpha_t, beta_t = self._get_alpha_beta(t, max_ratio, gamma, t_peak=t_peak)
+    alpha_bar_t, beta_bar_t = self._get_alpha_beta_bar(
+      t, max_ratio, gamma, t_peak, version=self.schedule_version)
+    alpha_t, beta_t = self._get_alpha_beta(
+      t, max_ratio, gamma, t_peak=t_peak, version=self.schedule_version)
 
-    alpha_bar_s, beta_bar_s = self._get_alpha_beta_bar(s, max_ratio, gamma, t_peak)
-    alpha_s, beta_s = self._get_alpha_beta(s, max_ratio, gamma, t_peak=t_peak)
+    alpha_bar_s, beta_bar_s = self._get_alpha_beta_bar(
+      s, max_ratio, gamma, t_peak, version=self.schedule_version)
+    alpha_s, beta_s = self._get_alpha_beta(
+      s, max_ratio, gamma, t_peak=t_peak, version=self.schedule_version)
 
     # Case 1, z_t is mask
 
@@ -726,7 +773,37 @@ class Diffusion(L.LightningModule):
   def training_step(self, batch, batch_idx):
     loss = self._compute_loss(batch, prefix='train')
     
-
+    # Track loss jumps
+    current_loss = loss.item()
+    if self.loss_ema is None:
+      self.loss_ema = current_loss
+    else:
+      # EMA with decay 0.95
+      self.loss_ema = 0.95 * self.loss_ema + 0.05 * current_loss
+      
+      # Check for jump (threshold 2.0x of EMA)
+      if current_loss > 2.0 * self.loss_ema:
+        print(f"[Warning] Loss jump detected: {current_loss:.4f} (EMA: {self.loss_ema:.4f})")
+        
+        # Save batch
+        save_dir = os.path.join(self.config.checkpointing.save_dir, 'noisy_batches')
+        os.makedirs(save_dir, exist_ok=True)
+        
+        filename = f"noisy_batch_step_{self.global_step}_rank_{self.trainer.global_rank}_loss_{current_loss:.2f}.json"
+        filepath = os.path.join(save_dir, filename)
+        
+        # Extract input_ids
+        if isinstance(batch, dict) and 'input_ids' in batch:
+            batch_data = batch['input_ids'].cpu().tolist()
+        else:
+             batch_data = str(batch)
+             
+        try:
+          with open(filepath, 'w') as f:
+            json.dump(batch_data, f)
+          print(f"Saved noisy batch to {filepath}")
+        except Exception as e:
+          print(f"Failed to save noisy batch: {e}")
 
     self.log(name='trainer/loss',
              value=loss.item(),
@@ -737,12 +814,8 @@ class Diffusion(L.LightningModule):
 
   def on_validation_epoch_start(self):
     if self.ema:
-      self.ema.store(itertools.chain(
-        self.backbone.parameters(),
-        self.noise.parameters()))
-      self.ema.copy_to(itertools.chain(
-        self.backbone.parameters(),
-        self.noise.parameters()))
+      self.ema.store(self._ema_params())
+      self.ema.copy_to(self._ema_params())
     self.backbone.eval()
     self.noise.eval()
     assert self.valid_metrics.nll.mean_value == 0
@@ -756,6 +829,7 @@ class Diffusion(L.LightningModule):
          or not self.trainer.sanity_checking)
          and self.config.eval.generate_samples
          and not self.parameterization == 'ar'):
+      # TODO(justin): implement sampling and kv cache for AR
       samples, text_samples = None, None
       for _ in range(
         self.config.sampling.num_sample_batches):
@@ -780,15 +854,33 @@ class Diffusion(L.LightningModule):
                  on_step=False,
                  sync_dist=True)
     if self.ema:
-      self.ema.restore(
-        itertools.chain(self.backbone.parameters(),
-                        self.noise.parameters()))
+      self.ema.restore(self._ema_params())
 
   def configure_optimizers(self):
+    # TODO: Lightning currently giving this warning when using `fp16`:
+    #  "Detected call of `lr_scheduler.step()` before `optimizer.step()`. "
+    #  Not clear if this is a problem or not.
+    #  See: https://github.com/Lightning-AI/pytorch-lightning/issues/5558
+    optim_groups = [{
+      'params': itertools.chain(
+        self.backbone.parameters(),
+        self.noise.parameters()),
+      'lr': self.config.optim.lr,
+    }]
+    if self._uses_learnable_schedule():
+      schedule_lr = getattr(
+        self.config.optim,
+        'schedule_lr',
+        self.config.optim.lr * 0.02)
+      optim_groups.append({
+        'params': itertools.chain(
+          self.noise_gamma.parameters(),
+          self.noise_rho.parameters()),
+        'lr': schedule_lr,
+      })
+
     optimizer = torch.optim.AdamW(
-      itertools.chain(self.backbone.parameters(),
-                      self.noise.parameters()),
-      lr=self.config.optim.lr,
+      optim_groups,
       betas=(self.config.optim.beta1,
              self.config.optim.beta2),
       eps=self.config.optim.eps,
@@ -945,6 +1037,7 @@ class Diffusion(L.LightningModule):
     uniform_probs.scatter_(-1, x.unsqueeze(-1), 0.0)
     uniform_tokens = _sample_categorical(uniform_probs)
 
+    # TODO: We can remove self.mask_index and current x from the random sample.
     xt = torch.where(uniform_indices, uniform_tokens, xt)
     return xt
 
@@ -1105,16 +1198,16 @@ class Diffusion(L.LightningModule):
     # Calculate dt based on effective time difference to ensure consistency
     dt_eff = eff_t - eff_s
 
-    # In paper, we use \rho_t and \gamma_t as the marginal distribution parameters.
-    # In code implementation, we use \bar\alpha_t and \bar\beta_t.
-    # The two sets of parameters are related by the following equations:
-    # \gamma_t = \bar{\alpha}_t + \bar{\beta}_t; 
-    # \rho_t = \bar{\beta}_t / (\bar{\alpha}_t + \bar{\beta}_t);
+    alpha_bar_t, beta_bar_t = self._get_alpha_beta_bar(
+      eff_t, self.config.forward.ratio, self.config.forward.gamma,
+      self.config.forward.t_peak, version=self.schedule_version)
+    alpha_t, beta_t = self._get_alpha_beta(
+      eff_t, self.config.forward.ratio, self.config.forward.gamma,
+      dt_eff, self.config.forward.t_peak, version=self.schedule_version)
 
-    alpha_bar_t, beta_bar_t = self._get_alpha_beta_bar(eff_t, self.config.forward.ratio, self.config.forward.gamma, self.config.forward.t_peak)
-    alpha_t, beta_t = self._get_alpha_beta(eff_t, self.config.forward.ratio, self.config.forward.gamma, dt_eff, self.config.forward.t_peak)
-
-    alpha_bar_s, beta_bar_s = self._get_alpha_beta_bar(eff_s, self.config.forward.ratio, self.config.forward.gamma, self.config.forward.t_peak)
+    alpha_bar_s, beta_bar_s = self._get_alpha_beta_bar(
+      eff_s, self.config.forward.ratio, self.config.forward.gamma,
+      self.config.forward.t_peak, version=self.schedule_version)
 
     # Compute the posterior distribution
     # Case 1: sampling when current token is not mask
@@ -1266,19 +1359,13 @@ class Diffusion(L.LightningModule):
     """
     # Lightning auto-casting is not working in this method for some reason
     if self.ema:
-      self.ema.store(itertools.chain(
-        self.backbone.parameters(),
-        self.noise.parameters()))
-      self.ema.copy_to(itertools.chain(
-        self.backbone.parameters(),
-        self.noise.parameters()))
+      self.ema.store(self._ema_params())
+      self.ema.copy_to(self._ema_params())
     self.backbone.eval()
     self.noise.eval()
     result = self._sample(num_steps=num_steps, eps=eps)
     if self.ema:
-      self.ema.restore(itertools.chain(
-        self.backbone.parameters(),
-        self.noise.parameters()))
+      self.ema.restore(self._ema_params())
     self.backbone.train()
     self.noise.train()
     return result
@@ -1434,7 +1521,9 @@ class Diffusion(L.LightningModule):
       if self.config.debug:
         xt = self.q_xt(x0, mask_chance)
       else:
-        alpha_bar_t, beta_bar_t = self._get_alpha_beta_bar(t, self.config.forward.ratio, self.config.forward.gamma, self.config.forward.t_peak)
+        alpha_bar_t, beta_bar_t = self._get_alpha_beta_bar(
+          t, self.config.forward.ratio, self.config.forward.gamma,
+          self.config.forward.t_peak, version=self.schedule_version)
         mask_chance = 1 - alpha_bar_t - beta_bar_t
         uniform_chance = (self.vocab_size - 2) * beta_bar_t / (self.vocab_size-1)
 
@@ -1587,12 +1676,8 @@ class Diffusion(L.LightningModule):
     """Generate samples from the model."""
     # Lightning auto-casting is not working in this method for some reason
     if self.ema:
-      self.ema.store(itertools.chain(
-        self.backbone.parameters(),
-        self.noise.parameters()))
-      self.ema.copy_to(itertools.chain(
-        self.backbone.parameters(),
-        self.noise.parameters()))
+      self.ema.store(self._ema_params())
+      self.ema.copy_to(self._ema_params())
     self.backbone.eval()
     self.noise.eval()
     (sampling_steps, samples,
@@ -1602,9 +1687,7 @@ class Diffusion(L.LightningModule):
       num_strides=num_strides, 
       dt=dt)
     if self.ema:
-      self.ema.restore(itertools.chain(
-        self.backbone.parameters(),
-        self.noise.parameters()))
+      self.ema.restore(self._ema_params())
     self.backbone.train()
     self.noise.train()
     return sampling_steps, samples, sequence_lengths
