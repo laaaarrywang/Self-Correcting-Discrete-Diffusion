@@ -80,9 +80,9 @@ def main():
     model, config = load_model(args.checkpoint_path, device)
     print(f"Model: {config.model.name}, parameterization={model.parameterization}")
 
-    denoising_step = diffusion_module.ScdlmDenoisingStep(model)
+    denoising_step = diffusion_module.ScddDenoisingStep(model)
     denoising_step = torch.compile(denoising_step)
-    print("torch.compile applied to ScdlmDenoisingStep")
+    print("torch.compile applied to ScddDenoisingStep")
 
     step_counts = [int(s) for s in args.steps.split(",")]
     results = {

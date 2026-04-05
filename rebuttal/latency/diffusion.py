@@ -157,14 +157,14 @@ class Perplexity(NLL):
     return torch.exp(self.mean_value / self.weight)
 
 
-class ScdlmDenoisingStep(torch.nn.Module):
-  """Wraps _scdlm_update as an nn.Module for torch.compile."""
+class ScddDenoisingStep(torch.nn.Module):
+  """Wraps _scdd_update as an nn.Module for torch.compile."""
   def __init__(self, model):
     super().__init__()
     self.model = model
 
   def forward(self, x, t, dt):
-    return self.model._scdlm_update(x, t, dt)
+    return self.model._scdd_update(x, t, dt)
 
 
 class Diffusion(L.LightningModule):
@@ -264,9 +264,9 @@ class Diffusion(L.LightningModule):
     if self.parameterization == 'd3pm':
       assert self.T > 0
     if self.T > 0:
-      assert self.parameterization in {'d3pm', 'subs', 'scdlm'}
+      assert self.parameterization in {'d3pm', 'subs', 'scdd'}
     if self.subs_masking:
-      assert self.parameterization in {'d3pm', 'scdlm'}
+      assert self.parameterization in {'d3pm', 'scdd'}
 
   def on_load_checkpoint(self, checkpoint):
     if self.ema:
@@ -393,7 +393,7 @@ class Diffusion(L.LightningModule):
     logits[unmasked_indices, xt[unmasked_indices]] = 0
     return logits
   
-  def _scdlm_parameterization(self, logits):
+  def _scdd_parameterization(self, logits):
 
     logits[:, :, self.mask_index] += self.neg_infinity
     # Return LOG probabilities (like D3PM) for numerical stability
@@ -448,8 +448,8 @@ class Diffusion(L.LightningModule):
       return self._sedd_parameterization(logits=logits,
                                          xt=x,
                                          sigma=sigma)
-    elif self.parameterization == 'scdlm':
-      return self._scdlm_parameterization(logits=logits)
+    elif self.parameterization == 'scdd':
+      return self._scdd_parameterization(logits=logits)
     elif self.parameterization == 'd3pm':
       return self._d3pm_parameterization(logits=logits)
     return logits
@@ -531,7 +531,7 @@ class Diffusion(L.LightningModule):
     return alpha_t, beta_t
 
 
-  def _scdlm_correction_loss(self, 
+  def _scdd_correction_loss(self, 
     alpha_t, beta_t,                 # (B, 1)   alpha_i, beta_i
     alpha_bar_t, beta_bar_t,         # (B, 1)   alpha_bar_i, beta_bar_i
     alpha_bar_s, beta_bar_s,         # (B, 1)   alpha_bar_{i-1}, beta_bar_{i-1}
@@ -619,7 +619,7 @@ class Diffusion(L.LightningModule):
     return out
 
 
-  def _scdlm_loss(self, model_output, xt, x0, t):
+  def _scdd_loss(self, model_output, xt, x0, t):
     """
     model_output: (batch_size, seq_len, vocab_size)
     xt: (batch_size, seq_len)
@@ -682,7 +682,7 @@ class Diffusion(L.LightningModule):
     mask_loss = -constant[:, None] * (base[:, None] * sum_log + alpha_bar_s[:, None] * log_at_x0)
 
     # Case 2, z_t is not mask
-    correction_loss = self._scdlm_correction_loss(
+    correction_loss = self._scdd_correction_loss(
       alpha_t, beta_t, alpha_bar_t, beta_bar_t,
       alpha_bar_s, beta_bar_s,
       x0, xt, model_output, log_term,
@@ -1123,7 +1123,7 @@ class Diffusion(L.LightningModule):
 
     return x
 
-  def _scdlm_update(self, x, t, dt):
+  def _scdd_update(self, x, t, dt):
     """
     Posterior sampling for self-correction diffusion language model
 
@@ -1218,10 +1218,10 @@ class Diffusion(L.LightningModule):
 
   @torch.no_grad()
   def compile_sampler(self):
-    """Compile the SCDLM denoising step for faster sampling."""
-    if self.sampler == 'scdlm':
-      self._compiled_scdlm_step = torch.compile(
-        ScdlmDenoisingStep(self))
+    """Compile the SCDD denoising step for faster sampling."""
+    if self.sampler == 'scdd':
+      self._compiled_scdd_step = torch.compile(
+        ScddDenoisingStep(self))
     return self
 
   def _sample(self, num_steps=None, eps=1e-5):
@@ -1269,11 +1269,11 @@ class Diffusion(L.LightningModule):
       x_prev = x
       if self.sampler == 'ddpm':
         x = self._ddpm_update(x, t, dt)
-      elif self.sampler == 'scdlm':
-        if hasattr(self, '_compiled_scdlm_step'):
-          x = self._compiled_scdlm_step(x, t, dt)
+      elif self.sampler == 'scdd':
+        if hasattr(self, '_compiled_scdd_step'):
+          x = self._compiled_scdd_step(x, t, dt)
         else:
-          x = self._scdlm_update(x, t, dt)
+          x = self._scdd_update(x, t, dt)
       elif self.sampler == 'llada':
         x = self._llada_update(x, t, dt)
       elif self.sampler == 'ddpm_cache':
@@ -1520,14 +1520,14 @@ class Diffusion(L.LightningModule):
     
     if self.T > 0:
 
-      if  self.parameterization == 'scdlm':
-        diffusion_loss = self._scdlm_loss(model_output=model_output, xt=xt, x0=x0, t=t)
+      if  self.parameterization == 'scdd':
+        diffusion_loss = self._scdd_loss(model_output=model_output, xt=xt, x0=x0, t=t)
       else:
         diffusion_loss = self._d3pm_loss(model_output=model_output, xt=xt, x0=x0, t=t)
 
       if self.parameterization == 'd3pm':
         reconstruction_loss = self._reconstruction_loss(x0)
-      elif self.parameterization in {'subs', 'scdlm'}:
+      elif self.parameterization in {'subs', 'scdd'}:
         reconstruction_loss = 0
       return reconstruction_loss + diffusion_loss
     

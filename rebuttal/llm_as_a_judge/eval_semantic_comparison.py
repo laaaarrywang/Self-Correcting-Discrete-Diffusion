@@ -318,7 +318,7 @@ def _generate_scdd(model, x_t_all, correction_steps, t_start, batch_size, device
             x = x_t_all[start : start + batch_size].clone()
             for i in range(correction_steps):
                 t = timesteps[i] * torch.ones(x.shape[0], 1, device=device)
-                x = model._scdlm_update(x, t, dt)
+                x = model._scdd_update(x, t, dt)
             t_final = timesteps[-1] * torch.ones(x.shape[0], 1, device=device)
             unet_cond = model.noise(t_final)[0]
             x = model.forward(x, unet_cond).argmax(dim=-1)

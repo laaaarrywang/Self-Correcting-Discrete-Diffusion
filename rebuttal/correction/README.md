@@ -16,9 +16,9 @@ This folder contains the code and instructions to reproduce the two correction a
 
 ### Replace `scdd/diffusion.py`
 
-Copy `diffusion.py` from this folder to `scdd/diffusion.py`. The only changes relative to the latency-optimized version are in `_scdlm_update`:
+Copy `diffusion.py` from this folder to `scdd/diffusion.py`. The only changes relative to the latency-optimized version are in `_scdd_update`:
 
-1. **Added `x_input = x`** at the top of `_scdlm_update` to save the original input tokens before sampling.
+1. **Added `x_input = x`** at the top of `_scdd_update` to save the original input tokens before sampling.
 
 2. **Added `_disable_corrections` check** before `return x`:
    ```python

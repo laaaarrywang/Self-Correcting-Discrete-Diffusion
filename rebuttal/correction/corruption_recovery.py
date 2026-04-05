@@ -123,7 +123,7 @@ def run_last_step(model, corrupted_ids, num_steps, eps=1e-5):
     model.noise.eval()
 
     with torch.no_grad():
-        x = model._scdlm_update(x, t, dt)
+        x = model._scdd_update(x, t, dt)
 
         if model.config.sampling.noise_removal:
             t_final = timesteps[-1] * torch.ones(

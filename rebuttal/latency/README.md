@@ -30,11 +30,11 @@ Copy `dit.py` from this folder to `scdd/models/dit.py`. Changes made:
 
 Copy `diffusion.py` from this folder to `scdd/diffusion.py`. Changes made:
 
-- **Added `ScdlmDenoisingStep` class** (before `class Diffusion`): An `nn.Module` wrapper around `_scdlm_update` that `torch.compile` can trace. This mirrors GIDD+'s `DenoisingStep` pattern.
-- **Added `compile_sampler()` method** to `Diffusion`: Lazily creates and compiles the `ScdlmDenoisingStep`, stored as `self._compiled_scdlm_step`.
-- **Modified `_sample()` loop**: The `scdlm` branch now uses `_compiled_scdlm_step` when available, falling back to `_scdlm_update` otherwise. This means existing code that does not call `compile_sampler()` is unaffected.
-- **Removed `assert` statements** in `_scdlm_update`: `assert sigma_t.ndim == 1` causes graph breaks in `torch.compile`.
-- **Replaced data-dependent `.any()` guards with unconditional `.clamp()`** in `_scdlm_update`: Data-dependent control flow (`if (eff_t < 0).any()`) causes graph breaks. The unconditional `eff_t.clamp(min=0.0)` is semantically equivalent and compile-friendly.
+- **Added `ScddDenoisingStep` class** (before `class Diffusion`): An `nn.Module` wrapper around `_scdd_update` that `torch.compile` can trace. This mirrors GIDD+'s `DenoisingStep` pattern.
+- **Added `compile_sampler()` method** to `Diffusion`: Lazily creates and compiles the `ScddDenoisingStep`, stored as `self._compiled_scdd_step`.
+- **Modified `_sample()` loop**: The `scdd` branch now uses `_compiled_scdd_step` when available, falling back to `_scdd_update` otherwise. This means existing code that does not call `compile_sampler()` is unaffected.
+- **Removed `assert` statements** in `_scdd_update`: `assert sigma_t.ndim == 1` causes graph breaks in `torch.compile`.
+- **Replaced data-dependent `.any()` guards with unconditional `.clamp()`** in `_scdd_update`: Data-dependent control flow (`if (eff_t < 0).any()`) causes graph breaks. The unconditional `eff_t.clamp(min=0.0)` is semantically equivalent and compile-friendly.
 
 ## Running the Benchmark
 
