@@ -6,7 +6,6 @@ This folder contains the code and instructions to reproduce the two correction a
 
 | File | Description |
 |------|-------------|
-| `response_correction.md` | Rebuttal response with results and discussion |
 | `diffusion.py` | Modified diffusion module with `_disable_corrections` support (replaces `scdd/diffusion.py`) |
 | `ablation_correction.py` | Experiment 1: Gen-PPL with/without corrections |
 | `corruption_recovery.py` | Experiment 2: Corruption recovery at last step |

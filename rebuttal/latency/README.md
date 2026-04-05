@@ -6,7 +6,6 @@ This folder contains the code and instructions to reproduce the latency benchmar
 
 | File | Description |
 |------|-------------|
-| `response_latency.md` | Rebuttal response with benchmark results and discussion |
 | `diffusion.py` | Modified SCDD diffusion module (replaces `scdd/diffusion.py`) |
 | `dit.py` | Modified DiT backbone (replaces `scdd/models/dit.py`) |
 | `bench_latency_scdd.py` | SCDD latency benchmark script |
