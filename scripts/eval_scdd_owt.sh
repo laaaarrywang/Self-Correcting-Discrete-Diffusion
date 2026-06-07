@@ -7,8 +7,8 @@
 #SBATCH -t 960:00:00                  # Time limit (hh:mm:ss)
 #SBATCH --partition=gpu               # Request partition
 #SBATCH --constraint="[a5000|a6000|a100|3090]"
-#SBATCH --ntasks-per-node=4
-#SBATCH --gres=gpu:4                  # Type/number of GPUs needed
+#SBATCH --ntasks-per-node=1
+#SBATCH --gres=gpu:1                  # Type/number of GPUs needed
 #SBATCH --open-mode=append            # Do not overwrite logs
 #SBATCH --requeue                     # Requeue upon preemption
 
@@ -35,7 +35,7 @@ SAMPLING_EPS=1e-3
 cd /path/to/project/
 
 module load conda
-conda activate scdd
+conda activate "${CONDA_ENV:-scdd}"
 
 # Sampling steps to evaluate
 STEPS_LIST=(32 64 128 256 512 1024 2048)
@@ -49,24 +49,28 @@ for S in "${STEPS_LIST[@]}"; do
     
     LOG_FILE="$RESULTS_DIR/eval_steps_${S}.log"
     
-    # We use mode=sample_eval for efficiency (only runs sampling, skips validation set NLL)
-    # We reuse training parameters to ensure correct model config (especially forward.ratio/gamma for SCDLM)
-    srun python -u -m main \
+    # mode=sample_eval: runs generation + gen-ppl only, skips validation NLL (faster).
+    # forward.ratio/gamma must match the values used during training.
+    # trainer.devices=1: single-GPU eval; increase and adjust batch_size proportionally for multi-GPU.
+    # SCDD sampling uses torch.compile acceleration by default.
+    python -u -m main \
       mode=sample_eval \
       eval.checkpoint_path="${CHECKPOINT}" \
       T=${T} \
       seed=${SEED} \
       model=${MODEL} \
       data=${DATA} \
-      loader.batch_size=5 \
-      loader.eval_batch_size=5 \
+      loader.batch_size=16 \
+      loader.eval_batch_size=16 \
+      trainer.devices=1 \
       parameterization=scdd \
       model.length=${LENGTH} \
       eval.compute_generative_perplexity=True \
       eval.print_changes=False \
       sampling.steps=${S} \
       sampling.predictor=scdd \
-      sampling.num_sample_batches=1 \
+      sampling.compile_sampler=True \
+      sampling.num_sample_batches=4 \
       sampling.nucleus_p=0.9 \
       forward=mix \
       forward.ratio=${RATIO} \

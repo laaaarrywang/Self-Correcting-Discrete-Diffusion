@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="description" content="Generalized Discrete Diffusion with Self-Correction">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Self-Correcting Discrete Diffusion</title>
+  <link rel="stylesheet" href="static/css/index.css">
+</head>
+
+<body>
+  <header class="hero">
+    <nav class="topbar" aria-label="Project links">
+      <a class="brand" href="#">SCDD</a>
+      <div class="nav-links">
+        <a href="#method">Method</a>
+        <a href="#experiments">Experiments</a>
+        <a href="#citation">BibTeX</a>
+      </div>
+    </nav>
+
+    <div class="hero-inner">
+      <p class="eyebrow">Self-Correcting Discrete Diffusion</p>
+      <h1>Generalized Discrete Diffusion with Self-Correction</h1>
+      <p class="subtitle">
+        A discrete diffusion language model whose sampler can revise incorrect visible tokens without remasking them.
+      </p>
+
+      <p class="authors">Larry Wang</p>
+
+      <div class="buttons">
+        <a class="button primary" href="https://github.com/laaaarrywang/Self-Correcting-Discrete-Diffusion">Code</a>
+        <a class="button" href="#citation">BibTeX</a>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section class="teaser" aria-labelledby="teaser-title">
+      <div class="container">
+        <h2 id="teaser-title">Self-Correction Without Remasking</h2>
+        <img
+          src="assets/scdd_self_correction_without_remasking.jpg"
+          alt="Diagram showing SCDD revising a wrong visible token from reviewed to revised without remasking."
+        >
+        <p>
+          SCDD keeps the parallel denoising behavior of masked diffusion while allowing visible tokens to transition
+          directly to better visible tokens during sampling.
+        </p>
+      </div>
+    </section>
+
+    <section class="content-section" id="method">
+      <div class="container two-column">
+        <div>
+          <p class="section-kicker">Method</p>
+          <h2>From masking to self-correction</h2>
+        </div>
+        <p>
+          The forward process mixes absorbing mask corruption with uniform token corruption. The reverse process is
+          trained to recover masked positions and repair visible mistakes, giving the sampler a direct correction path
+          instead of requiring a wrong token to be frozen or remasked.
+        </p>
+      </div>
+    </section>
+
+    <section class="content-section soft" id="experiments">
+      <div class="container two-column">
+        <div>
+          <p class="section-kicker">Experiments</p>
+          <h2>Language modeling and correction</h2>
+        </div>
+        <p>
+          The public code supports training and evaluation on OpenWebText, WikiText-103, and LM1B, along with
+          supplementary correction experiments that probe whether the sampler can recover from visible token errors.
+        </p>
+      </div>
+    </section>
+
+    <section class="content-section" id="citation">
+      <div class="container">
+        <p class="section-kicker">Citation</p>
+        <h2>BibTeX</h2>
+        <pre><code>@article{wang2026scdd,
+  title={Generalized Discrete Diffusion with Self-Correction},
+  author={Wang, Larry},
+  year={2026}
+}</code></pre>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="container">
+      <span>SCDD</span>
+      <span>Self-Correcting Discrete Diffusion</span>
+    </div>
+  </footer>
+</body>
+</html>

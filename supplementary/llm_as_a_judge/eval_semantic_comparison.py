@@ -148,8 +148,8 @@ def _build_scdd_checkpoint_loader():
     import tokenizers as _tk
 
     SCRIPT_DIR = Path(__file__).parent.resolve()
-    sys.path.insert(0, str(SCRIPT_DIR.parent / "mdlm_v2"))
-    sys.path.insert(0, str(SCRIPT_DIR.parent / "mdlm_v2" / "mdlm"))
+    repo_root = SCRIPT_DIR.parents[1]
+    sys.path.insert(0, str(repo_root))
     import dataloader  # noqa: E402
     import diffusion   # noqa: E402
 
@@ -243,12 +243,14 @@ def _build_corruptions_shared(scdd, clean_ids, t_start=T_START_DEFAULT):
 
     torch.manual_seed(SEED)
     t = torch.full((batch,), t_start, device=scdd.device)
-    alpha_bar, beta_bar = scdd._get_alpha_beta_bar(
+    schedule_t = scdd._get_scdd_schedule(
         t, scdd.config.forward.ratio,
         scdd.config.forward.gamma, scdd.config.forward.t_peak)
-    mask_chance = (1 - alpha_bar - beta_bar)[:, None]
+    mask_chance = schedule_t.absorbed_mass[:, None]
     uniform_chance = (
-        (scdd.vocab_size - 2) * beta_bar / (scdd.vocab_size - 1))[:, None]
+        (scdd.vocab_size - 2)
+        * schedule_t.uniform_mass
+        / (scdd.vocab_size - 1))[:, None]
 
     draws = torch.rand(clean_ids.shape, device=clean_ids.device)
     mask_positions = draws < mask_chance
@@ -375,7 +377,7 @@ def run_scdd(args):
             scdd_tokenizer=_build_tokenizer_metadata(scdd),
             gidd_expected=corruption["gidd_expected"],
             forward_ratio=scdd.config.forward.ratio,
-            forward_gamma=scdd.config.forward.gamma,
+            forward_gamma_shape=scdd.config.forward.gamma,
             forward_t_peak=scdd.config.forward.t_peak,
         )
         print("[rank 0] Corruption files saved.")

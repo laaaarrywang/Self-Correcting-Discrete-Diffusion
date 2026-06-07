@@ -8,11 +8,13 @@ Reports per-batch gen-ppl with mean ± standard error.
 import argparse
 import json
 import math
+import sys
+from pathlib import Path
 
 import torch
 
-import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'mdlm_v2', 'mdlm'))
+REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT))
 
 import dataloader
 import diffusion as diffusion_module

@@ -8,7 +8,6 @@ import omegaconf
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from einops import rearrange
 
 # Flags required to enable jit fusion kernels
 torch._C._jit_set_profiling_mode(False)
@@ -49,7 +48,6 @@ def modulate(x: torch.Tensor,
   return x * (1 + scale) + shift
 
 
-@torch.jit.script
 def bias_dropout_add_scale_fused_train(
     x: torch.Tensor,
     bias: typing.Optional[torch.Tensor],
@@ -60,7 +58,6 @@ def bias_dropout_add_scale_fused_train(
     x, bias, scale, residual, prob, True)
 
 
-@torch.jit.script
 def bias_dropout_add_scale_fused_inference(
     x: torch.Tensor,
     bias: typing.Optional[torch.Tensor],
@@ -71,7 +68,6 @@ def bias_dropout_add_scale_fused_inference(
     x, bias, scale, residual, prob, False)
 
 
-@torch.jit.script
 def modulate_fused(x: torch.Tensor,
                    shift: torch.Tensor,
                    scale: torch.Tensor) -> torch.Tensor:
@@ -113,11 +109,6 @@ def apply_rotary_pos_emb(qkv, cos, sin):
   cos = cos[0,:,0,0,:cos.shape[-1]//2]
   sin = sin[0,:,0,0,:sin.shape[-1]//2]
   return flash_attn.layers.rotary.apply_rotary_emb_qkv_(qkv, cos, sin)
-
-
-# function overload
-def modulate(x, shift, scale):
-  return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
 
 
 #################################################################################
@@ -254,15 +245,11 @@ class DDiTBlock(nn.Module):
     x = modulate_fused(self.norm1(x), shift_msa, scale_msa)
 
     qkv = self.attn_qkv(x)
-    qkv = rearrange(qkv,
-                    'b s (three h d) -> b s three h d',
-                    three=3,
-                    h=self.n_heads)
-    with torch.cuda.amp.autocast(enabled=False):
-      cos, sin = rotary_cos_sin
-      qkv = apply_rotary_pos_emb(
-        qkv, cos.to(qkv.dtype), sin.to(qkv.dtype))
-    qkv = rearrange(qkv, 'b s ... -> (b s) ...')
+    qkv = qkv.view(batch_size, seq_len, 3, self.n_heads, -1)
+    cos, sin = rotary_cos_sin
+    qkv = apply_rotary_pos_emb(
+      qkv, cos.to(qkv.dtype), sin.to(qkv.dtype))
+    qkv = qkv.reshape(batch_size * seq_len, *qkv.shape[2:])
     if seqlens is None:
       cu_seqlens = torch.arange(
         0, (batch_size + 1) * seq_len, step=seq_len,
@@ -272,7 +259,7 @@ class DDiTBlock(nn.Module):
     x = flash_attn.flash_attn_interface.flash_attn_varlen_qkvpacked_func(
       qkv, cu_seqlens, seq_len, 0., causal=False)
     
-    x = rearrange(x, '(b s) h d -> b s (h d)', b=batch_size)
+    x = x.reshape(batch_size, seq_len, -1)
 
     x = bias_dropout_scale_fn(self.attn_out(x),
                               None,

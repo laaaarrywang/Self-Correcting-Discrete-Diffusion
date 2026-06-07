@@ -22,6 +22,21 @@ import utils
 LOG2 = math.log(2)
 
 
+@dataclass
+class ScddSchedule:
+  """SCDD forward process schedule at time t.
+
+  The marginal q(x_t | x_0) is a mixture of clean tokens, uniform noise,
+  and masked tokens, parameterized by rho_t (clean fraction) and gamma_t
+  (total non-absorbed mass).
+  """
+  clean_mass: Tensor
+  uniform_mass: Tensor
+  absorbed_mass: Tensor
+  gamma_t: Tensor
+  rho_t: Tensor
+
+
 def _sample_categorical(categorical_probs):
   categorical_probs = categorical_probs.to(torch.float64)
   gumbel_norm = (
@@ -34,90 +49,6 @@ def _unsqueeze(x, reference):
   return x.view(
     * x.shape,
     * ((1,) * (len(reference.shape) - len(x.shape))))
-
-def _check_valid_probability_distribution(probs, name="probs", epsilon=1e-6):
-  """Check if probs represents a valid probability distribution.
-
-  Args:
-    probs: torch.Tensor of shape (B, S, V) or (B*S, V)
-    name: string identifier for debugging
-    epsilon: tolerance for probability sum check
-
-  Returns:
-    bool: True if valid, False otherwise
-    dict: diagnostic information
-  """
-  diagnostics = {}
-  is_valid = True
-
-  # Check for NaN values
-  has_nan = torch.isnan(probs).any()
-  diagnostics['has_nan'] = has_nan.item()
-  if has_nan:
-    is_valid = False
-    nan_count = torch.isnan(probs).sum().item()
-    diagnostics['nan_count'] = nan_count
-    print(f"[WARNING] {name} contains {nan_count} NaN values")
-
-  # Check for Inf values
-  has_inf = torch.isinf(probs).any()
-  diagnostics['has_inf'] = has_inf.item()
-  if has_inf:
-    is_valid = False
-    inf_count = torch.isinf(probs).sum().item()
-    diagnostics['inf_count'] = inf_count
-    print(f"[WARNING] {name} contains {inf_count} Inf values")
-
-  # Check for negative values
-  has_negative = (probs < 0).any()
-  diagnostics['has_negative'] = has_negative.item()
-  if has_negative:
-    is_valid = False
-    neg_count = (probs < 0).sum().item()
-    min_val = probs.min().item()
-    diagnostics['negative_count'] = neg_count
-    diagnostics['min_value'] = min_val
-    print(f"[WARNING] {name} contains {neg_count} negative values, min={min_val}")
-
-  # Check if probabilities sum to ~1 (along last dimension)
-  if probs.ndim >= 2:
-    prob_sums = probs.sum(dim=-1)
-    sum_min = prob_sums.min().item()
-    sum_max = prob_sums.max().item()
-    sum_mean = prob_sums.mean().item()
-
-    diagnostics['sum_min'] = sum_min
-    diagnostics['sum_max'] = sum_max
-    diagnostics['sum_mean'] = sum_mean
-
-    # Check if any row sums to zero (can't sample from this)
-    zero_rows = (prob_sums < epsilon).any()
-    diagnostics['has_zero_rows'] = zero_rows.item()
-    if zero_rows:
-      is_valid = False
-      zero_row_count = (prob_sums < epsilon).sum().item()
-      diagnostics['zero_row_count'] = zero_row_count
-      print(f"[WARNING] {name} has {zero_row_count} rows that sum to ~0")
-
-    # Check if sums are far from 1 (warning, not necessarily invalid)
-    bad_sum = ((prob_sums < 1 - epsilon) | (prob_sums > 1 + epsilon)).any()
-    if bad_sum:
-      bad_sum_count = ((prob_sums < 1 - epsilon) | (prob_sums > 1 + epsilon)).sum().item()
-      diagnostics['bad_sum_count'] = bad_sum_count
-      print(f"[INFO] {name} has {bad_sum_count} rows with sum != 1 (range: [{sum_min:.6f}, {sum_max:.6f}])")
-
-  # Overall statistics
-  diagnostics['shape'] = tuple(probs.shape)
-  diagnostics['min'] = probs.min().item() if not has_nan and not has_inf else None
-  diagnostics['max'] = probs.max().item() if not has_nan and not has_inf else None
-  diagnostics['mean'] = probs.mean().item() if not has_nan and not has_inf else None
-
-  if not is_valid:
-    print(f"[ERROR] {name} is NOT a valid probability distribution")
-    print(f"[DEBUG] Diagnostics: {diagnostics}")
-
-  return is_valid, diagnostics
-
 
 def _3d_multinomial_sample(probs):
 
@@ -155,6 +86,16 @@ class Perplexity(NLL):
      Perplexity
     """
     return torch.exp(self.mean_value / self.weight)
+
+
+class ScddDenoisingStep(torch.nn.Module):
+  """Wraps _scdd_update as an nn.Module for torch.compile."""
+  def __init__(self, model):
+    super().__init__()
+    self.model = model
+
+  def forward(self, x, t, dt):
+    return self.model._scdd_update(x, t, dt)
 
 
 class Diffusion(L.LightningModule):
@@ -476,128 +417,99 @@ class Diffusion(L.LightningModule):
     return self.T * L_vb
 
 
-  def _get_alpha_beta_bar(self, t, max_ratio, gamma, t_peak=0.5):
-    """
-    t: (batch_size)
-    """
-    # B = 2**gamma * max_ratio / (1-max_ratio) # ensures that the uniform noise ratio achieves maximum at t = 0.5
-    # ct = B * torch.pow(t, gamma/2) * torch.pow(1-t, gamma/2)
-    # t in [0,1], want peak at t_peak and ratio(ct_peak)=max_ratio via odds=ct
-    a = gamma * t_peak
-    b = gamma * (1 - t_peak)
+  def _get_scdd_schedule(self, t, max_ratio, gamma_shape, t_peak=0.5):
+    """SCDD forward process schedule."""
+    a = gamma_shape * t_peak
+    b = gamma_shape * (1 - t_peak)
 
-    base_peak = (t_peak ** a) * ((1 - t_peak) ** b)          
-    B = (max_ratio / (1 - max_ratio)) / base_peak            
-    ct = B * torch.pow(t,a) * torch.pow(1-t,b)                       
-
+    base_peak = (t_peak ** a) * ((1 - t_peak) ** b)
+    B = (max_ratio / (1 - max_ratio)) / base_peak
+    ct = B * torch.pow(t, a) * torch.pow(1 - t, b)
 
     if self.config.debug:
       ct = 0 * ct
 
-    alpha_bar_t = (1-t)/(1+ct)
-    beta_bar_t = ct/(1+ct)
+    clean_mass = (1 - t) / (1 + ct)
+    uniform_mass = ct / (1 + ct)
+    absorbed_mass = 1 - clean_mass - uniform_mass
 
-    if beta_bar_t.isnan().any():
-      print('='*25)
-      print('[Debug] t: ', t)
-      print('[Debug] ct: ', ct)
-      print('[Debug] alpha_bar_t: ', alpha_bar_t)
-      print('[Debug] beta_bar_t: ', beta_bar_t)
+    gamma_t = clean_mass + uniform_mass
+    rho_t = clean_mass / gamma_t.clamp(min=1e-30)
 
-    return alpha_bar_t, beta_bar_t
+    return ScddSchedule(
+      clean_mass=clean_mass,
+      uniform_mass=uniform_mass,
+      absorbed_mass=absorbed_mass,
+      gamma_t=gamma_t,
+      rho_t=rho_t)
 
 
-  def _get_alpha_beta(self, t, max_ratio, gamma, dt = None, t_peak=0.5):
-
+  def _get_scdd_transition(self, t, max_ratio, gamma_shape, dt=None, t_peak=0.5):
     if dt is None:
       dt = 1 / self.T
-    s = t - dt 
-    alpha_bar_t, beta_bar_t = self._get_alpha_beta_bar(t, max_ratio, gamma, t_peak)
-    alpha_bar_s, beta_bar_s = self._get_alpha_beta_bar(s, max_ratio, gamma, t_peak)
+    s = t - dt
 
-    alpha_t = alpha_bar_t / alpha_bar_s
-    beta_t = (alpha_bar_t + beta_bar_t)/(alpha_bar_s + beta_bar_s) - alpha_t
+    schedule_t = self._get_scdd_schedule(t, max_ratio, gamma_shape, t_peak)
+    schedule_s = self._get_scdd_schedule(s, max_ratio, gamma_shape, t_peak)
 
-    return alpha_t, beta_t
+    clean_transition = schedule_t.clean_mass / schedule_s.clean_mass
+    uniform_transition = schedule_t.gamma_t / schedule_s.gamma_t - clean_transition
+
+    return clean_transition, uniform_transition
 
 
-  def _scdd_correction_loss(self, 
-    alpha_t, beta_t,                 # (B, 1)   alpha_i, beta_i
-    alpha_bar_t, beta_bar_t,         # (B, 1)   alpha_bar_i, beta_bar_i
-    alpha_bar_s, beta_bar_s,         # (B, 1)   alpha_bar_{i-1}, beta_bar_{i-1}
-    x0,                              # (B, L)   token ids, guaranteed != mask_id
-    x_t,                             # (B, L)   token ids, intended != mask_id for second case
+  def _scdd_correction_loss(self,
+    rho_t, rho_s,
+    clean_fraction_transition,
+    uniform_fraction_transition,
+    x0,
+    x_t,
     model_output,
-    log_num,                         # (B, L, V) precomputed log term
-    sum_log_num_excl_mask,           # (B, L) precomputed sum
-    log_num_x0                       # (B, L) precomputed log_num at x0
+    log_num,
+    sum_log_num_excl_mask,
+    log_num_x0
     ):
 
     B, L, V = model_output.shape
     dtype = model_output.dtype
-    device = model_output.device
     K = V - 1  # sum domain excludes the mask token
 
-    # Scalars
-    base_im1   = beta_bar_s / K        # (B,1)  \bar{beta}_{i-1}/K
-    base_bar_i = beta_bar_t / K        # (B,1)  \bar{beta}_i/K
-    base_i     = beta_t / K            # (B,1)  beta_i/K
+    base_s = (1 - rho_s) / K
+    base_t = (1 - rho_t) / K
+    uniform_transition_per_token = uniform_fraction_transition / K
 
-    # --- log_num(z) = log(\bar{beta}_{i-1}/K + \bar{alpha}_{i-1} * p_theta(z))
-    # num = (base_im1[:, None, None] + alpha_bar_s[:, None, None] * model_output)
-    # log_num = torch.log(num)  # (B,L,V)
-
-    # --- zero-out trick and sums are now passed in as arguments
-    
-    # log_num at x0 and at x_t (x0 != m by assumption; x_t intended != m for 2nd case)
-    # log_num_x0 is passed in
     log_num_xt = log_num.gather(dim=-1, index=x_t.unsqueeze(-1)).squeeze(-1) # (B,L)
 
-    # --- denom_theta = \bar{beta}_i/K + \bar{alpha}_i * p_theta(x_t)
-    # model_output is now LOG probabilities
     log_p_xt = model_output.gather(dim=-1, index=x_t.unsqueeze(-1)).squeeze(-1)  # (B,L)
 
-    # NUMERICAL STABILITY: use log-space arithmetic
-    # log(base_bar_i + alpha_bar_t * p_xt) = logsumexp(log(base_bar_i), log(alpha_bar_t) + log(p_xt))
-    base_bar_i_is_zero = (base_bar_i < 1e-30)
-    if base_bar_i_is_zero.all():
-      # Degenerate case: log(alpha_bar_t * p_xt) = log(alpha_bar_t) + log(p_xt)
-      log_denom_theta = torch.log(alpha_bar_t[:, None].clamp(min=1e-30)) + log_p_xt
+    base_t_is_zero = (base_t < 1e-30)
+    if base_t_is_zero.all():
+      log_denom_theta = torch.log(rho_t[:, None].clamp(min=1e-30)) + log_p_xt
     else:
-      # Normal case: use log-sum-exp
-      log_base = torch.log(base_bar_i)  # (B,) or (B, 1)
-      # Ensure log_base has shape (B, 1) for broadcasting
+      log_base = torch.log(base_t)
       if log_base.ndim == 1:
         log_base = log_base[:, None]
-      log_alpha_p = torch.log(alpha_bar_t[:, None].clamp(min=1e-30)) + log_p_xt  # (B, L)
+      log_clean_p = torch.log(rho_t[:, None].clamp(min=1e-30)) + log_p_xt
       log_denom_theta = torch.logaddexp(
-        log_base.expand_as(log_alpha_p),
-        log_alpha_p
+        log_base.expand_as(log_clean_p),
+        log_clean_p
       )
 
-    # log_ratio(z) = log_num(z) - log_denom_theta
     sum_log_ratio = sum_log_num_excl_mask - K * log_denom_theta  # (B,L)
     log_ratio_x0  = log_num_x0 - log_denom_theta                 # (B,L)
     log_ratio_xt  = log_num_xt - log_denom_theta                 # (B,L)
 
-    # --- denom_x = \bar{beta}_i/K + \bar{alpha}_i * (z_{t_i}^T x)
-    # Here x is represented by x0, so z_{t_i}^T x = 1[x_t == x0]
     eq_xt_x0 = (x_t == x0).to(dtype)  # (B,L)
-    denom_x = (base_bar_i[:, None] + alpha_bar_t[:, None] * eq_xt_x0) # (B,L)
+    denom_x = (base_t[:, None] + rho_t[:, None] * eq_xt_x0) # (B,L)
 
-    # NUMERICAL STABILITY: clamp denom_x to avoid division by zero
-    # When base_bar_i = 0 and x_t != x0, denom_x = 0, so inv_denom_x = inf
     inv_denom_x = 1.0 / denom_x.clamp(min=1e-30)
 
-    # --- Expand Σ_{z!=m} (A + B*δ_{z=x0}) (C + D*δ_{z=x_t}) log_ratio(z)
-    # A = \bar{beta}_{i-1}/K
-    # B = \bar{alpha}_{i-1}
-    # C = beta_i/K
-    # D = alpha_i
-    A = base_im1[:, None]           # (B,1) broadcast to (B,L)
-    Bterm = alpha_bar_s[:, None]    # (B,1)
-    C = base_i[:, None]             # (B,1)
-    Dterm = alpha_t[:, None]        # (B,1)
+    # Expand sum_z (A + B*1[z=x0]) (C + D*1[z=x_t]) log_ratio(z).
+    # A = (1-rho_s) / K, B = rho_s, C = ((rho_s-rho_t)/rho_s) / K, D = rho_t/rho_s
+    A = base_s[:, None]
+    Bterm = rho_s[:, None]
+    C = uniform_transition_per_token[:, None]
+    Dterm = clean_fraction_transition[:, None]
 
     total = (A * C) * sum_log_ratio \
           + (Bterm * C) * log_ratio_x0 \
@@ -621,65 +533,49 @@ class Diffusion(L.LightningModule):
     s = t - dt
 
     max_ratio = self.config.forward.ratio
-    gamma = self.config.forward.gamma
+    gamma_shape = self.config.forward.gamma
     t_peak = self.config.forward.t_peak
 
-    # In paper, we use \rho_t and \gamma_t as the marginal distribution parameters.
-    # In code implementation, we use \bar\alpha_t and \bar\beta_t.
-    # The two sets of parameters are related by the following equations:
-    # \gamma_t = \bar{\alpha}_t + \bar{\beta}_t; 
-    # \rho_t = \bar{\alpha}_t / (\bar{\alpha}_t + \bar{\beta}_t);
-    alpha_bar_t, beta_bar_t = self._get_alpha_beta_bar(t, max_ratio, gamma, t_peak)
-    alpha_t, beta_t = self._get_alpha_beta(t, max_ratio, gamma, t_peak=t_peak)
+    schedule_t = self._get_scdd_schedule(t, max_ratio, gamma_shape, t_peak)
+    schedule_s = self._get_scdd_schedule(s, max_ratio, gamma_shape, t_peak)
 
-    alpha_bar_s, beta_bar_s = self._get_alpha_beta_bar(s, max_ratio, gamma, t_peak)
-    alpha_s, beta_s = self._get_alpha_beta(s, max_ratio, gamma, t_peak=t_peak)
+    gamma_t = schedule_t.gamma_t
+    rho_t = schedule_t.rho_t
+    gamma_s = schedule_s.gamma_t
+    rho_s = schedule_s.rho_t
 
-    # Case 1, z_t is mask
+    rho_s_safe = rho_s.clamp(min=1e-30)
+    clean_fraction_transition = rho_t / rho_s_safe
+    uniform_fraction_transition = (rho_s - rho_t) / rho_s_safe
 
-    constant = (1 - alpha_t - beta_t) / (1 - alpha_bar_t - beta_bar_t)  # (B)
-    base = beta_bar_s / (self.vocab_size - 1)                           # (B)
-
-    # ===== NUMERICAL STABILITY: Work in log-space =====
-    # model_output is now LOG probabilities (from log_softmax)
-    # We need: log_term = log(base + alpha_bar_s * p_theta)
-    #
-    # When base=0: log(alpha_bar_s * p_theta) = log(alpha_bar_s) + log(p_theta)
-    # When base>0: log(base + alpha_bar_s * p_theta) = logsumexp(log(base), log(alpha_bar_s) + log(p_theta))
+    mask_coeff = (gamma_s - gamma_t) / (1 - gamma_t)
+    base = (1 - rho_s) / (self.vocab_size - 1)  # (B)
 
     log_p_theta = model_output  # Already in log-space! (B, L, V)
-    log_alpha_bar_s = torch.log(alpha_bar_s.clamp(min=1e-30))  # (B,)
+    log_rho_s = torch.log(rho_s.clamp(min=1e-30))  # (B,)
 
-    # Check if base is effectively zero (degenerate case)
     base_is_zero = (base < 1e-30).all()  # Scalar boolean
 
     if base_is_zero:
-      # Degenerate case: base = 0 everywhere
-      # log_term = log(alpha_bar_s) + log(p_theta)
-      log_term = log_alpha_bar_s[:, None, None] + log_p_theta  # (B, L, V)
+      log_term = log_rho_s[:, None, None] + log_p_theta  # (B, L, V)
     else:
-      # Normal case: base > 0 everywhere
       log_base = torch.log(base)  # (B,)
-      log_alpha_p = log_alpha_bar_s[:, None, None] + log_p_theta  # (B, L, V)
+      log_clean_p = log_rho_s[:, None, None] + log_p_theta  # (B, L, V)
       log_term = torch.logaddexp(
-        log_base[:, None, None].expand_as(log_alpha_p),
-        log_alpha_p
+        log_base[:, None, None].expand_as(log_clean_p),
+        log_clean_p
       )
-    # ===== END NUMERICAL STABILITY =====
-    
-    # We clone it or modify carefully for mask loss
+
     log_term_for_mask = log_term.clone()
     log_term_for_mask[:, :, self.mask_index] = 0
 
     sum_log = log_term_for_mask.sum(dim=-1)  # (B,L)
     log_at_x0 = log_term_for_mask.gather(dim=-1, index=x0.unsqueeze(-1)).squeeze(-1)  # (B,L)
 
-    mask_loss = -constant[:, None] * (base[:, None] * sum_log + alpha_bar_s[:, None] * log_at_x0)
+    mask_loss = -mask_coeff[:, None] * (base[:, None] * sum_log + rho_s[:, None] * log_at_x0)
 
-    # Case 2, z_t is not mask
     correction_loss = self._scdd_correction_loss(
-      alpha_t, beta_t, alpha_bar_t, beta_bar_t,
-      alpha_bar_s, beta_bar_s,
+      rho_t, rho_s, clean_fraction_transition, uniform_fraction_transition,
       x0, xt, model_output, log_term,
       sum_log, log_at_x0)
 
@@ -687,8 +583,6 @@ class Diffusion(L.LightningModule):
     flag = (xt == self.mask_index)
 
     loss = torch.where(flag, mask_loss, correction_loss)
-
-    # loss = mask_loss * flag + correction_loss * (1 - flag)
 
     return loss * self.T
 
@@ -925,8 +819,9 @@ class Diffusion(L.LightningModule):
     Args:
       x: int torch.Tensor with shape (batch_size,
           diffusion_model_input_length), input. 
-      mask_chance: float torch.Tensor with shape (batch_size, 1), 1 - alpha_bar_t - beta_bar_t
-      uniform_chance: float torch.Tensor with shape (batch_size, 1), (vocab_size-2) * beta_bar_t /(vocab_size-1)
+      mask_chance: float torch.Tensor with shape (batch_size, 1), absorbed_mass_t
+      uniform_chance: float torch.Tensor with shape (batch_size, 1),
+          (vocab_size - 2) * uniform_mass_t / (vocab_size - 1)
     """
 
     # Sample mask and uniform indices
@@ -1067,22 +962,20 @@ class Diffusion(L.LightningModule):
       t: torch.Tensor(batch_size), current time step
       dt: time step difference
     """
+    x_input = x
     sigma_t, _ = self.noise(t)
     sigma_s, _ = self.noise(t - dt)
     if sigma_t.ndim > 1:
       sigma_t = sigma_t.squeeze(-1)
     if sigma_s.ndim > 1:
       sigma_s = sigma_s.squeeze(-1)
-    assert sigma_t.ndim == 1, sigma_t.shape
-    assert sigma_s.ndim == 1, sigma_s.shape
-
     # Compute the sampling distribution:
     unet_conditioning = sigma_t
     log_x_theta = self.forward(x, unet_conditioning)
     # Convert from log probabilities to probabilities for sampling
     x_theta = log_x_theta.exp()
 
-    if self.config.sampling.nucleus_p < 1.0:
+    if self.config.sampling.nucleus_p < 1.0:  # static config — no graph break
       sorted_probs, sorted_indices = torch.sort(x_theta, descending=True, dim=-1)
       cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
       top_p_mask = cumulative_probs <= self.config.sampling.nucleus_p
@@ -1091,55 +984,64 @@ class Diffusion(L.LightningModule):
       nucleus_probs /= nucleus_probs.sum(dim=-1, keepdim=True)
       x_theta = torch.zeros_like(x_theta).scatter_(-1, sorted_indices, nucleus_probs)
 
-    # Compute schedules at t and s
-    # Calculate effective times
+    # Compute effective times.
     eff_t = 1 - torch.exp(-sigma_t)
     eff_s = 1 - torch.exp(-sigma_s)
 
     # Ensure effective times are non-negative to avoid NaNs
-    if (eff_t < 0).any(): 
-       eff_t = eff_t.clamp(min=0.0)
-    if (eff_s < 0).any():
-       eff_s = eff_s.clamp(min=0.0)
+    eff_t = eff_t.clamp(min=0.0)
+    eff_s = eff_s.clamp(min=0.0)
 
-    # Calculate dt based on effective time difference to ensure consistency
-    dt_eff = eff_t - eff_s
+    gamma_shape = self.config.forward.gamma
+    t_peak = self.config.forward.t_peak
+    max_ratio = self.config.forward.ratio
 
-    # In paper, we use \rho_t and \gamma_t as the marginal distribution parameters.
-    # In code implementation, we use \bar\alpha_t and \bar\beta_t.
-    # The two sets of parameters are related by the following equations:
-    # \gamma_t = \bar{\alpha}_t + \bar{\beta}_t; 
-    # \rho_t = \bar{\beta}_t / (\bar{\alpha}_t + \bar{\beta}_t);
+    schedule_t = self._get_scdd_schedule(eff_t, max_ratio, gamma_shape, t_peak)
+    schedule_s = self._get_scdd_schedule(eff_s, max_ratio, gamma_shape, t_peak)
 
-    alpha_bar_t, beta_bar_t = self._get_alpha_beta_bar(eff_t, self.config.forward.ratio, self.config.forward.gamma, self.config.forward.t_peak)
-    alpha_t, beta_t = self._get_alpha_beta(eff_t, self.config.forward.ratio, self.config.forward.gamma, dt_eff, self.config.forward.t_peak)
+    gamma_t = schedule_t.gamma_t
+    clean_mass_t = schedule_t.clean_mass
+    uniform_mass_t = schedule_t.uniform_mass
+    absorbed_mass_t = schedule_t.absorbed_mass
 
-    alpha_bar_s, beta_bar_s = self._get_alpha_beta_bar(eff_s, self.config.forward.ratio, self.config.forward.gamma, self.config.forward.t_peak)
+    gamma_s = schedule_s.gamma_t
+    clean_mass_s = schedule_s.clean_mass
+    uniform_mass_s = schedule_s.uniform_mass
+    absorbed_mass_s = schedule_s.absorbed_mass
+
+    clean_transition = clean_mass_t / clean_mass_s
+    uniform_transition = gamma_t / gamma_s - clean_transition
+    absorbing_transition = 1 - clean_transition - uniform_transition
 
     # Compute the posterior distribution
     # Case 1: sampling when current token is not mask
-    denominator = beta_bar_t[:, None, None] / (self.vocab_size - 1) + alpha_bar_t[:, None, None] * torch.gather(x_theta, -1, x.unsqueeze(-1))
+    denominator = uniform_mass_t[:, None, None] / (self.vocab_size - 1) + clean_mass_t[:, None, None] * torch.gather(x_theta, -1, x.unsqueeze(-1))
 
-    numerator = alpha_bar_s[:, None, None] * beta_t[:, None, None] / (self.vocab_size - 1) * x_theta \
-      + beta_bar_s[:, None, None] * beta_t[:, None, None] / (self.vocab_size - 1)**2
+    numerator = clean_mass_s[:, None, None] * uniform_transition[:, None, None] / (self.vocab_size - 1) * x_theta \
+      + uniform_mass_s[:, None, None] * uniform_transition[:, None, None] / (self.vocab_size - 1)**2
 
-    add_x = alpha_bar_s[:, None, None] * alpha_t[:, None, None] * torch.gather(x_theta, -1, x.unsqueeze(-1)) \
-      + alpha_t[:, None, None] * beta_bar_s[:, None, None] / (self.vocab_size - 1)
+    add_x = clean_mass_s[:, None, None] * clean_transition[:, None, None] * torch.gather(x_theta, -1, x.unsqueeze(-1)) \
+      + clean_transition[:, None, None] * uniform_mass_s[:, None, None] / (self.vocab_size - 1)
 
-    numerator = numerator.scatter_add(-1, x.unsqueeze(-1), add_x) # add add_x to numerator at locations speficied by x.unsqueeze(-1)
+    numerator = numerator.scatter_add(-1, x.unsqueeze(-1), add_x)
     numerator[:, :, self.mask_index] = 0.0
 
     correct_probs = numerator / denominator
 
     # Case 2: sampling when current token is mask
-    mask_probs = ((1-alpha_t-beta_t) /(1-alpha_bar_t-beta_bar_t) * beta_bar_s / (self.vocab_size-1) )[:, None, None] \
-      + ((1-alpha_t - beta_t) /(1-alpha_bar_t - beta_bar_t) * alpha_bar_s)[:, None, None] * x_theta
-    mask_probs[:, :, self.mask_index] = ((1-alpha_bar_s - beta_bar_s)/(1-alpha_bar_t - beta_bar_t))[:, None]
+    mask_nonabsorbed_coeff = absorbing_transition / absorbed_mass_t
+    mask_probs = (mask_nonabsorbed_coeff[:, None, None] * uniform_mass_s[:, None, None] / (self.vocab_size-1)) \
+      + (mask_nonabsorbed_coeff[:, None, None] * clean_mass_s[:, None, None]) * x_theta
+    mask_probs[:, :, self.mask_index] = (absorbed_mass_s / absorbed_mass_t)[:, None]
 
     copy_flag = (x != self.mask_index)
     probs = torch.where(copy_flag.unsqueeze(-1), correct_probs, mask_probs)
 
     x = _sample_categorical(probs)
+
+    if getattr(self, '_disable_corrections', False):
+      was_unmasked = (x_input != self.mask_index)
+      x = torch.where(was_unmasked, x_input, x)
 
     return x
 
@@ -1160,6 +1062,27 @@ class Diffusion(L.LightningModule):
       y = (next_logits + noise[:, i]).argmax(-1)
       x[:, i + 1] = y
     return x
+
+  def compile_sampler(self):
+    """Compile the SCDD denoising step for faster sampling."""
+    if self.sampler == 'scdd':
+      self._compiled_scdd_step = torch.compile(
+        ScddDenoisingStep(self))
+    return self
+
+  def _should_compile_sampler(self):
+    sampling_config = getattr(self.config, 'sampling', None)
+    if sampling_config is None:
+      return True
+    if hasattr(sampling_config, 'get'):
+      return sampling_config.get('compile_sampler', True)
+    return getattr(sampling_config, 'compile_sampler', True)
+
+  def _maybe_compile_sampler(self):
+    if (self.sampler == 'scdd'
+        and self._should_compile_sampler()
+        and not hasattr(self, '_compiled_scdd_step')):
+      self.compile_sampler()
 
   @torch.no_grad()
   def _sample(self, num_steps=None, eps=1e-5):
@@ -1208,7 +1131,10 @@ class Diffusion(L.LightningModule):
       if self.sampler == 'ddpm':
         x = self._ddpm_update(x, t, dt)
       elif self.sampler == 'scdd':
-        x = self._scdd_update(x, t, dt)
+        if hasattr(self, '_compiled_scdd_step'):
+          x = self._compiled_scdd_step(x, t, dt)
+        else:
+          x = self._scdd_update(x, t, dt)
       elif self.sampler == 'llada':
         x = self._llada_update(x, t, dt)
       elif self.sampler == 'ddpm_cache':
@@ -1274,6 +1200,7 @@ class Diffusion(L.LightningModule):
         self.noise.parameters()))
     self.backbone.eval()
     self.noise.eval()
+    self._maybe_compile_sampler()
     result = self._sample(num_steps=num_steps, eps=eps)
     if self.ema:
       self.ema.restore(itertools.chain(
@@ -1434,18 +1361,19 @@ class Diffusion(L.LightningModule):
       if self.config.debug:
         xt = self.q_xt(x0, mask_chance)
       else:
-        alpha_bar_t, beta_bar_t = self._get_alpha_beta_bar(t, self.config.forward.ratio, self.config.forward.gamma, self.config.forward.t_peak)
-        mask_chance = 1 - alpha_bar_t - beta_bar_t
-        uniform_chance = (self.vocab_size - 2) * beta_bar_t / (self.vocab_size-1)
+        schedule_t = self._get_scdd_schedule(
+          t, self.config.forward.ratio,
+          self.config.forward.gamma, self.config.forward.t_peak)
+        mask_chance = schedule_t.absorbed_mass
+        uniform_chance = (
+          (self.vocab_size - 2) * schedule_t.uniform_mass
+          / (self.vocab_size-1))
 
         xt = self.q_xt_sc(x0, mask_chance, uniform_chance)
         
     else: 
       xt = self.q_xt(x0, mask_chance)
     
-    if unet_conditioning.isnan().any():
-       print("[Debug] ALERT: sigma contains NaNs!")
-
     model_output = self.forward(xt, unet_conditioning)
     utils.print_nans(model_output, 'model_output')
 
@@ -1608,95 +1536,3 @@ class Diffusion(L.LightningModule):
     self.backbone.train()
     self.noise.train()
     return sampling_steps, samples, sequence_lengths
-
-  
-  def _check_token_changes(self, x_prev, x_curr, step_num):
-    """Check and report token changes between two timesteps.
-
-    Args:
-      x_prev: Previous token sequence with shape (batch_size, seq_len)
-      x_curr: Current token sequence with shape (batch_size, seq_len)
-      step_num: Current sampling step index
-
-    Returns:
-      Dictionary with change statistics
-    """
-    # Type 1: mask -> non-mask changes
-    was_mask = (x_prev == self.mask_index)
-    is_non_mask = (x_curr != self.mask_index)
-    mask_to_nonmask = (was_mask & is_non_mask)
-
-    # Type 2: non-mask -> different non-mask changes (Correction)
-    was_non_mask = (x_prev != self.mask_index)
-    is_different = (x_prev != x_curr)
-    
-    # Correction: Was generated (non-mask), AND changed to DIFFERENT NON-MASK token
-    # Exclude: NonMask -> Mask (re-masking)
-    # Exclude: Mask -> NonMask (first generation)
-    correction_mask = (was_non_mask & is_non_mask & is_different)
-    nonmask_to_nonmask = correction_mask # Alias for stats consistency
-
-    # Total tokens that changed
-    total_changed = is_different.sum().item()
-
-    # Statistics
-    total_tokens = x_prev.numel()
-    corrections_count = correction_mask.sum().item()
-    mask_to_nonmask_count = mask_to_nonmask.sum().item()
-    still_mask_count = (x_curr == self.mask_index).sum().item()
-    
-    # Additional metrics
-    mask_ratio = still_mask_count / max(total_tokens, 1)
-    correction_rate = corrections_count / max(total_tokens, 1)
-    generation_rate = mask_to_nonmask_count / max(total_tokens, 1)
-    change_rate = total_changed / max(total_tokens, 1)
-    
-    stats = {
-      'total_tokens': total_tokens,
-      'total_changed': total_changed,
-      'mask_to_nonmask': mask_to_nonmask_count,
-      'nonmask_to_nonmask': nonmask_to_nonmask.sum().item(),
-      'corrections': corrections_count,
-      'still_mask': still_mask_count,
-      'unchanged': (~is_different).sum().item(),
-      'mask_ratio': mask_ratio,
-      'correction_rate': correction_rate,
-      'generation_rate': generation_rate,
-      'change_rate': change_rate,
-    }
-
-    # print(f"[Token Changes Step {step_num}] Total: {stats['total_changed']}/{stats['total_tokens']} "
-    #       f"| Mask->NM: {stats['mask_to_nonmask']} "
-    #       f"| NM->NM: {stats['nonmask_to_nonmask']} "
-    #       f"| Corrections: {stats['corrections']}")
-
-    # If correction happened, save/print the result
-    if stats['corrections'] > 0:
-        # Find first batch index with corrections
-        batch_indices = torch.where(correction_mask.any(dim=1))[0]
-        if len(batch_indices) > 0:
-            idx = batch_indices[0].item()
-            
-            # Decode sequences
-            # Move to cpu for decoding
-            seq_prev = x_prev[idx].cpu()
-            seq_curr = x_curr[idx].cpu()
-            
-            # Helper to visualize mask
-            def decode_with_mask(seq):
-                text = self.tokenizer.decode(seq)
-                # If mask token isn't obvious, we might want to manually insert [MASK]
-                # But typically mask_index points to a token logic.
-                # Let's trust decoder first, but print IDs if needed.
-                return text
-
-            text_prev = decode_with_mask(seq_prev)
-            text_curr = decode_with_mask(seq_curr)
-
-            print(f"\n[Correction Detected at Step {step_num}] Batch {idx}")
-            print(f"Correction Count in this batch: {correction_mask[idx].sum().item()}")
-            print(f"Prev: {text_prev}")
-            print(f"Curr: {text_curr}")
-            print("-" * 40)
-
-    return stats

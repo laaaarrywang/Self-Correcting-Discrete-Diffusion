@@ -30,6 +30,7 @@ loader:
 
 sampling:
   predictor: scdd  # analytic, ddpm, ddpm_cache, scdd
+  compile_sampler: True
   steps: 128
   noise_removal: True
   num_sample_batches: 2  # Total samples: `num_gpus` * `loader.eval_batch_size` * num_sample_batches

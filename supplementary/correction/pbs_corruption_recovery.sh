@@ -35,7 +35,7 @@ echo "  OUTPUT_PATH     : ${OUTPUT_PATH}"
 echo ""
 
 cd "${REPO_DIR}"
-python -u "${REPO_DIR}/rebuttal/corruption_recovery.py" \
+python -u "${REPO_DIR}/supplementary/correction/corruption_recovery.py" \
     --checkpoint_path "${SCDD_CKPT}" \
     --num_steps "${NUM_STEPS}" \
     --batch_size "${BATCH_SIZE}" \

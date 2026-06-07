@@ -33,7 +33,7 @@ WORK_DIR="${WORK_DIR:-${STORAGE_BASE}/eval_comparison/${RUN_SUFFIX}/work}"
 OUTPUT_DIR="${OUTPUT_DIR:-${STORAGE_BASE}/eval_comparison/${RUN_SUFFIX}/results}"
 mkdir -p "${WORK_DIR}" "${OUTPUT_DIR}"
 
-EVAL_SCRIPT="${REPO_DIR}/rebuttal/eval_semantic_comparison.py"
+EVAL_SCRIPT="${REPO_DIR}/supplementary/llm_as_a_judge/eval_semantic_comparison.py"
 
 echo "=== SCDD vs GIDD+ Semantic Comparison ==="
 echo "  SCDD_CKPT  : ${SCDD_CKPT}"
@@ -47,7 +47,7 @@ echo ""
 echo "Stage 1: SCDD generation (builds shared corruption)"
 # Activate SCDD conda env and cd to its codebase root
 conda activate scdd
-cd "${REPO_DIR}/scdd"
+cd "${REPO_DIR}"
 
 python -u "${EVAL_SCRIPT}" \
     --stage scdd \

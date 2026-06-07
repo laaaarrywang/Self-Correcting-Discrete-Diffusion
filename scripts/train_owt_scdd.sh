@@ -59,5 +59,4 @@ srun python -u -m main\
   trainer.val_check_interval=1.0 \
   optim.lr=${LR} \
   forward=mix \
-  forward.ratio=${RATIO} \
-  checkpointing.resume_ckpt_path=/path/to/checkpoints/last.ckpt
+  forward.ratio=${RATIO}

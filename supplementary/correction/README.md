@@ -6,39 +6,17 @@ This folder contains the code and instructions to reproduce the two correction a
 
 | File | Description |
 |------|-------------|
-| `diffusion.py` | Modified diffusion module with `_disable_corrections` support (replaces `scdd/diffusion.py`) |
 | `ablation_correction.py` | Experiment 1: Gen-PPL with/without corrections |
 | `corruption_recovery.py` | Experiment 2: Corruption recovery at last step |
 | `pbs_ablation_correction.sh` | Shell script for Experiment 1 (template) |
 | `pbs_corruption_recovery.sh` | Shell script for Experiment 2 (template) |
 
-## Changes to the Codebase
-
-### Replace `scdd/diffusion.py`
-
-Copy `diffusion.py` from this folder to `scdd/diffusion.py`. The only changes relative to the latency-optimized version are in `_scdd_update`:
-
-1. **Added `x_input = x`** at the top of `_scdd_update` to save the original input tokens before sampling.
-
-2. **Added `_disable_corrections` check** before `return x`:
-   ```python
-   if getattr(self, '_disable_corrections', False):
-       was_unmasked = (x_input != self.mask_index)
-       x = torch.where(was_unmasked, x_input, x)
-   ```
-   When `model._disable_corrections = True`, this freezes all already-unmasked positions, allowing only `[MASK]` → token transitions (no corrections). Default behavior is unchanged.
-
-These changes do not affect training, normal generation, or model outputs when `_disable_corrections` is not set.
-
 ## Running the Experiments
 
-### 1. Update the codebase
+The scripts import the repository's root `diffusion.py`; no source replacement
+is required.
 
-```bash
-cp diffusion.py <REPO>/scdd/diffusion.py
-```
-
-### 2. Experiment 1: No-Correction Ablation
+### 1. Experiment 1: No-Correction Ablation
 
 Generates text with corrections enabled and disabled, compares Gen-PPL (GPT-2-large). Reports per-batch PPL with mean ± standard error.
 
@@ -58,7 +36,7 @@ Or edit `pbs_ablation_correction.sh` to fill in `<REPO_DIR>` and `<DATA_DIR>`, t
 bash pbs_ablation_correction.sh
 ```
 
-### 3. Experiment 2: Corruption Recovery
+### 2. Experiment 2: Corruption Recovery
 
 Corrupts K tokens in clean validation text, runs one SCDD denoising step at the last-step noise level, measures touch/recovery/damage rates. Saves clean, corrupted, and corrected text per sample.
 
