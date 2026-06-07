@@ -2,6 +2,13 @@
 
 This repository contains the implementation code for our Self-Correcting Discrete Diffusion (SCDD) model, a generalized discrete diffusion model with self-correction capabilities.
 
+## Links
+
+- **Project Page:** https://laaaarrywang.github.io/Self-Correcting-Discrete-Diffusion/
+- **arXiv:** https://arxiv.org/abs/2603.02230
+- **Hugging Face Models:** https://huggingface.co/laaaarrywang/SCDD
+- **Code:** https://github.com/laaaarrywang/Self-Correcting-Discrete-Diffusion
+
 ## Environment Setup
 
 Create the conda environment:
