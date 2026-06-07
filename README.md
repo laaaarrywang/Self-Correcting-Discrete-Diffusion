@@ -1,19 +1,8 @@
 # Generalized Discrete Diffusion with Self-Correction
 
-<p align="center">
-  <a href="https://laaaarrywang.github.io/Self-Correcting-Discrete-Diffusion/">
-    <img alt="Project Page" src="https://img.shields.io/badge/Project-Page-0E8D72?style=flat-square&logo=githubpages&logoColor=white">
-  </a>
-  <a href="https://arxiv.org/abs/2603.02230">
-    <img alt="arXiv" src="https://img.shields.io/badge/arXiv-2603.02230-B31B1B?style=flat-square&logo=arxiv&logoColor=white">
-  </a>
-  <a href="https://huggingface.co/laaaarrywang/SCDD">
-    <img alt="Hugging Face Models" src="https://img.shields.io/badge/Hugging%20Face-Models-FFD21E?style=flat-square&logo=huggingface&logoColor=black">
-  </a>
-  <a href="https://github.com/laaaarrywang/Self-Correcting-Discrete-Diffusion">
-    <img alt="Code" src="https://img.shields.io/badge/Code-GitHub-181717?style=flat-square&logo=github&logoColor=white">
-  </a>
-</p>
+[![Project Page](https://img.shields.io/badge/Project%20Page-0366d6?logo=gitbook&logoColor=white)](https://laaaarrywang.github.io/Self-Correcting-Discrete-Diffusion/)
+[![Hugging Face](https://img.shields.io/badge/Hugging%20Face-ff6f00?logo=huggingface&logoColor=white)](https://huggingface.co/laaaarrywang/SCDD)
+[![arXiv](https://img.shields.io/badge/arXiv-2603.02230-b31b1b?logo=arxiv&logoColor=white)](https://arxiv.org/abs/2603.02230)
 
 This repository contains the implementation code for our Self-Correcting Discrete Diffusion (SCDD) model, a generalized discrete diffusion model with self-correction capabilities.
 
