@@ -50,7 +50,7 @@ pre {
   padding: 22px 0 34px;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(246, 248, 251, 0.98)),
-    url("../../assets/scdd_self_correction_without_remasking.jpg") center 68% / cover no-repeat;
+    url("../../assets/scdd_self_correction_without_remasking.gif") center 68% / cover no-repeat;
   border-bottom: 1px solid var(--line);
 }
 
