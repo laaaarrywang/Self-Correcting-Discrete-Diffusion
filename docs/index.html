@@ -85,10 +85,10 @@
   <main>
     <section class="teaser" aria-labelledby="teaser-title">
       <div class="container">
-        <h2 id="teaser-title">Self-Correction Without Remasking</h2>
+        <h2 id="teaser-title">Demo of Self-Correction Without Remasking</h2>
         <img
           src="assets/scdd_self_correction_without_remasking.gif"
-          alt="Animated diagram showing SCDD revising a wrong visible token from reviewed to revised without remasking."
+          alt="Animation of a real SCDD generation trajectory: a 512-token sequence denoising from all [MASK] to text, with decoded tokens revised in place (without remasking) as generation proceeds."
         >
         <p>
           Unlike masked-only denoising, SCDD can move between non-mask states during generation:
@@ -112,7 +112,7 @@
           </p>
         </article>
         <article>
-          <h3>Self-correction learned during pretraining</h3>
+          <h3>Learned self-correction ability</h3>
           <p>
             Self-correction is learned during pretraining rather than added through post-hoc sampler heuristics.
           </p>
