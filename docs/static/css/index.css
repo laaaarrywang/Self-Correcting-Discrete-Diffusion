@@ -357,6 +357,27 @@ h3 {
   font-variant-numeric: tabular-nums;
 }
 
+.semantic-table {
+  min-width: 1040px;
+}
+
+.semantic-table tbody td {
+  font-variant-numeric: tabular-nums;
+}
+
+.semantic-table .vs {
+  color: var(--muted);
+}
+
+.recovery-table tbody td {
+  font-variant-numeric: tabular-nums;
+}
+
+.recovery-table .se {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .highlight-row {
   background: var(--teal-soft);
 }

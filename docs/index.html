@@ -48,7 +48,6 @@
       <p class="roles">
         <span>* Equal contribution</span>
         <span>&dagger; Equal advising</span>
-        <span>Correspondence: Wei Deng, weideng056@gmail.com</span>
       </p>
 
       <div class="buttons">
@@ -298,6 +297,169 @@
         </div>
         <p class="table-note">
           <sup>&dagger;</sup>OWT models use a context length of 512 to match the GIDD setting reported in the paper.
+        </p>
+      </div>
+    </section>
+
+    <section class="content-section" id="semantic">
+      <div class="container">
+        <h2>Semantic Quality (LLM-as-a-Judge)</h2>
+        <p class="section-copy">
+          Generative perplexity rewards fluency under a reference language model, but it is a weak proxy for
+          semantic quality: it can be driven down by repetitive text and says little about whether a sample is actually clear, accurate, or well written. We therefore evaluate semantic quality directly with LLM-as-a-judge protocol. We corrupt <span class="math">256</span> clean OWT sequences to <span class="math">t = 0.8</span> with SCDD's forward process and let SCDD and GIDD+ denoise from the identical corrupted input at six step budgets. A GPT-5.4 judge scores each text 1&ndash;10 on five dimensions (clarity, grammaticality, factuality, style, creativity) and picks the winning text; we report per-metric means and the overall win rate. SCDD consistently outperforms GIDD+ on clarity, factuality, and style &mdash; with significant gains at higher step counts &mdash; and maintains higher overall win rates, reaching 60.6% at 1024 steps.
+        </p>
+
+        <div class="table-wrap">
+          <table class="paper-table semantic-table">
+            <caption>
+              Table 4. Semantic quality under a GPT-5.4 judge &mdash; matched-schedule setting
+              (SCDD <span class="math">p<sub>u</sub> = 0.2</span> vs. GIDD+ <span class="math">p<sub>u</sub> = 0.2</span>).
+              Each cell is SCDD&nbsp;(GIDD+); scores are 1&ndash;10 (higher is better).
+            </caption>
+            <thead>
+              <tr>
+                <th rowspan="2">Metric</th>
+                <th colspan="6">Sampling steps</th>
+              </tr>
+              <tr>
+                <th>32</th>
+                <th>64</th>
+                <th>128</th>
+                <th>256</th>
+                <th>512</th>
+                <th>1024</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th>Clarity</th>
+                <td>1.65 <span class="vs">(1.49)</span><sup>**</sup></td>
+                <td>1.62 <span class="vs">(1.52)</span></td>
+                <td>1.69 <span class="vs">(1.50)</span><sup>**</sup></td>
+                <td>1.68 <span class="vs">(1.56)</span><sup>*</sup></td>
+                <td>1.73 <span class="vs">(1.50)</span><sup>**</sup></td>
+                <td>1.73 <span class="vs">(1.48)</span><sup>**</sup></td>
+              </tr>
+              <tr>
+                <th>Grammaticality</th>
+                <td>1.38 <span class="vs">(1.42)</span></td>
+                <td>1.46 <span class="vs">(1.49)</span></td>
+                <td>1.45 <span class="vs">(1.46)</span></td>
+                <td>1.49 <span class="vs">(1.53)</span></td>
+                <td>1.51 <span class="vs">(1.47)</span></td>
+                <td>1.57 <span class="vs">(1.46)</span><sup>*</sup></td>
+              </tr>
+              <tr>
+                <th>Factuality</th>
+                <td>2.20 <span class="vs">(2.11)</span><sup>*</sup></td>
+                <td>2.13 <span class="vs">(2.07)</span></td>
+                <td>2.20 <span class="vs">(2.05)</span><sup>**</sup></td>
+                <td>2.21 <span class="vs">(2.12)</span><sup>*</sup></td>
+                <td>2.13 <span class="vs">(1.97)</span><sup>**</sup></td>
+                <td>2.20 <span class="vs">(2.07)</span><sup>**</sup></td>
+              </tr>
+              <tr>
+                <th>Style</th>
+                <td>1.62 <span class="vs">(1.50)</span><sup>*</sup></td>
+                <td>1.63 <span class="vs">(1.53)</span></td>
+                <td>1.66 <span class="vs">(1.51)</span><sup>**</sup></td>
+                <td>1.66 <span class="vs">(1.57)</span></td>
+                <td>1.70 <span class="vs">(1.52)</span><sup>**</sup></td>
+                <td>1.73 <span class="vs">(1.50)</span><sup>**</sup></td>
+              </tr>
+              <tr>
+                <th>Creativity</th>
+                <td>2.78 <span class="vs">(2.99)</span><sup>**</sup></td>
+                <td>2.81 <span class="vs">(3.02)</span><sup>**</sup></td>
+                <td>2.88 <span class="vs">(3.14)</span><sup>**</sup></td>
+                <td>2.84 <span class="vs">(3.14)</span><sup>**</sup></td>
+                <td>2.94 <span class="vs">(3.14)</span><sup>**</sup></td>
+                <td>2.93 <span class="vs">(3.15)</span><sup>**</sup></td>
+              </tr>
+              <tr class="highlight-row">
+                <th>Win rate (SCDD)</th>
+                <td>55.9%</td>
+                <td>53.0%</td>
+                <td>55.3%</td>
+                <td>52.0%</td>
+                <td>58.1%<sup>*</sup></td>
+                <td><strong>60.6%</strong><sup>**</sup></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="table-note">
+          Significance: <sup>*</sup><span class="math">p &lt; 0.05</span>,
+          <sup>**</sup><span class="math">p &lt; 0.01</span>. Metric scores use a two-sided paired
+          <em>t</em>-test; win rate uses a binomial test (<span class="math">n = 256</span>).
+        </p>
+      </div>
+    </section>
+
+    <section class="content-section soft" id="recovery">
+      <div class="container">
+        <h2>Exact Recovery of Corrupted Tokens</h2>
+        <p class="section-copy">
+          SCDD substantially increases the overall edit rate during generation when compared to GIDD. We further want to know whether these edits are genuine corrections or spurious revisions. To test this directly, we run a controlled corruption&ndash;recovery experiment on clean OWT validation sequences: for each sequence, we
+          corrupt <span class="math">K</span> randomly chosen positions with uniformly sampled
+          replacement tokens, then apply one SCDD denoising step at the
+          final-step noise level (step 127 of a 128-step schedule). We report the <strong>touch rate</strong>, the fraction of corrupted tokens the model edits; the <strong>recovery rate</strong>, the fraction restored exactly to the original clean token; and generative perplexity before and after the step. SCDD touches nearly every corrupted token and exactly recovers 64&ndash;69% of them. At the heaviest corruption level (<span class="math">K = 50</span>), a single step reduces Gen PPL from 154.8 to 25.5.
+        </p>
+
+        <div class="table-wrap">
+          <table class="paper-table recovery-table">
+            <caption>
+              Table 6. Recovery of corrupted tokens on OWT validation sequences after a single denoising step.
+              Gen PPL is reported before (corrupted) and after (corrected) the step. Mean &plusmn; standard error
+              over 128 samples.
+            </caption>
+            <thead>
+              <tr>
+                <th rowspan="2"><span class="math">K</span></th>
+                <th rowspan="2">Touch rate</th>
+                <th rowspan="2">Recovery rate</th>
+                <th colspan="2">Gen PPL</th>
+              </tr>
+              <tr>
+                <th>Corrupted</th>
+                <th>Corrected</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th>5</th>
+                <td>1.000 <span class="se">&plusmn; 0.000</span></td>
+                <td><strong>0.694</strong> <span class="se">&plusmn; 0.013</span></td>
+                <td>22.0 <span class="se">&plusmn; 0.3</span></td>
+                <td>23.8 <span class="se">&plusmn; 0.5</span></td>
+              </tr>
+              <tr>
+                <th>10</th>
+                <td>1.000 <span class="se">&plusmn; 0.000</span></td>
+                <td><strong>0.652</strong> <span class="se">&plusmn; 0.011</span></td>
+                <td>28.2 <span class="se">&plusmn; 0.4</span></td>
+                <td>24.0 <span class="se">&plusmn; 0.4</span></td>
+              </tr>
+              <tr>
+                <th>20</th>
+                <td>0.999 <span class="se">&plusmn; 0.001</span></td>
+                <td><strong>0.647</strong> <span class="se">&plusmn; 0.008</span></td>
+                <td>44.7 <span class="se">&plusmn; 0.7</span></td>
+                <td>24.3 <span class="se">&plusmn; 0.5</span></td>
+              </tr>
+              <tr>
+                <th>50</th>
+                <td>1.000 <span class="se">&plusmn; 0.000</span></td>
+                <td><strong>0.644</strong> <span class="se">&plusmn; 0.005</span></td>
+                <td>154.8 <span class="se">&plusmn; 2.2</span></td>
+                <td>25.5 <span class="se">&plusmn; 0.4</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="table-note">
+          SCDD restores the majority of corrupted tokens exactly and collapses the perplexity gap in a single step,
+          indicating that its self-corrections perform meaningful content recovery rather than spurious edits.
         </p>
       </div>
     </section>
